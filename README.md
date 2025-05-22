@@ -23,17 +23,14 @@ Colab Demo: https://colab.research.google.com/drive/1UAKFkbPQTfkYMq1GxXfGZOJXOXU
 
 ## Getting started
 Prerequisites:
-- Python 3.9
-- Conda
+- Python 3.12
+- PDM
 
 ### Setup
-1. Clone this repository to your disk
-3. Install required packages (see requirements.txt).
-With `venv`:
+1. Clone this repository to your disk (with `--recurse-submodules`)
+2. Install required packages
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+pdm install
 ```
 
 ### Preparing the Data
