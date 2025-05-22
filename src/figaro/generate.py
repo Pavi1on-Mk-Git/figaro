@@ -36,7 +36,7 @@ def parse_args():
 
 def load_old_or_new_checkpoint(model_class, checkpoint):
   # assuming transformers>=4.36.0
-  pl_ckpt = torch.load(checkpoint, map_location="cpu")
+  pl_ckpt = torch.load(checkpoint, weights_only=False, map_location="cpu")
   kwargs = pl_ckpt['hyper_parameters']
   if 'flavor' in kwargs:
     del kwargs['flavor']
