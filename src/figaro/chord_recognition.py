@@ -166,7 +166,7 @@ class MIDIChord(object):
     chords = [None for i in range(max_tick + 1)]
     # store score of best chords at each position
     scores = np.zeros(max_tick + 1)
-    scores[1:].fill(np.NINF)
+    scores[1:].fill(-np.inf)
 
     start_tick = 0
     while start_tick < max_tick:
