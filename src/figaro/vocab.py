@@ -95,7 +95,6 @@ class Tokens:
 class Vocab:
     def __init__(self, counter, specials=[PAD_TOKEN, UNK_TOKEN, BOS_TOKEN, EOS_TOKEN, MASK_TOKEN], unk_token=UNK_TOKEN):
         token_freqs = [(token, freq) for token, freq in counter.items()]
-        token_freqs.sort(key=lambda x: (-x[1], x[0]))
 
         tokens = [token for token, _ in token_freqs]
         self.itos = specials + tokens
