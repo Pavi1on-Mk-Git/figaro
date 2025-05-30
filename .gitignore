@@ -10,3 +10,4 @@ tmp
 .venv
 .hypothesis
 src/figaro.egg-info/*
+.pdm-python
