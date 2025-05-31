@@ -1,5 +1,3 @@
-
-
 import pytorch_lightning as pl
 import torch.optim
 import torch.nn as nn
@@ -7,23 +5,20 @@ import torch.nn.functional as F
 import math
 import numpy as np
 import random
-from datasets import MidiDataModule
-from vocab import RemiVocab
-from constants import PAD_TOKEN, BOS_TOKEN, EOS_TOKEN, MASK_TOKEN
+from figaro.datasets import MidiDataModule
+from figaro.vocab import RemiVocab
+from figaro.constants import PAD_TOKEN, BOS_TOKEN, EOS_TOKEN, MASK_TOKEN
 
-import transformers
-from transformers import (
-  BertConfig,
-  EncoderDecoderConfig,
-  EncoderDecoderModel
-)
+from transformers import BertConfig, EncoderDecoderConfig, EncoderDecoderModel
 
 
 # Implementation adapted from https://github.com/rosinality/vq-vae-2-pytorch/blob/master/vqvae.py
 # Random restarts adapted from https://github.com/openai/jukebox/blob/master/jukebox/vqvae/bottleneck.py
 class VectorQuantizeEMA(nn.Module):
     def __init__(self, d_latent, n_codes, n_groups=1, decay=0.995, eps=1e-4, restart_threshold=0.99):
-        assert d_latent // n_groups == d_latent / n_groups, f"Unexpected latent dimension: d_latent={d_latent} must be divisible by n_groups={n_groups}"
+        assert (
+            d_latent // n_groups == d_latent / n_groups
+        ), f"Unexpected latent dimension: d_latent={d_latent} must be divisible by n_groups={n_groups}"
 
         super().__init__()
 
@@ -38,12 +33,14 @@ class VectorQuantizeEMA(nn.Module):
         self.init = False
 
         embed = torch.randn(self.n_codes, self.dim)
-        self.register_buffer('embedding', embed)
-        self.register_buffer('cluster_size', torch.ones(self.n_codes))
-        self.register_buffer('cluster_sum', embed.clone().detach())
+        self.register_buffer("embedding", embed)
+        self.register_buffer("cluster_size", torch.ones(self.n_codes))
+        self.register_buffer("cluster_sum", embed.clone().detach())
 
     def forward(self, x, dist=None):
-        assert x.shape[-1] == self.n_groups * self.dim, f"Unexpected input shape: expected last dimension to be {self.n_groups * self.dim} but was {x.shape[-1]}"
+        assert (
+            x.shape[-1] == self.n_groups * self.dim
+        ), f"Unexpected input shape: expected last dimension to be {self.n_groups * self.dim} but was {x.shape[-1]}"
         x_ = x.reshape(-1, self.dim)
 
         if self.training and not self.init:
@@ -52,11 +49,7 @@ class VectorQuantizeEMA(nn.Module):
         ### Shared embeddings between groups ###
         # Find nearest neighbors in latent space
         emb_t = self.embedding.t()
-        distance = (
-            x_.pow(2).sum(1, keepdim=True)
-            - 2 * x_ @ emb_t
-            + emb_t.pow(2).sum(0, keepdim=True)
-        )
+        distance = x_.pow(2).sum(1, keepdim=True) - 2 * x_ @ emb_t + emb_t.pow(2).sum(0, keepdim=True)
         _, embed_idx = (-distance).max(1)
         embed_onehot = F.one_hot(embed_idx, self.n_codes).type(x_.dtype)
 
@@ -70,12 +63,7 @@ class VectorQuantizeEMA(nn.Module):
         else:
             update_metrics = {}
 
-        return dict(
-            z=quantize,
-            diff=diff,
-            codes=codes,
-            **update_metrics
-        )
+        return dict(z=quantize, diff=diff, codes=codes, **update_metrics)
 
     def embed(self, idx):
         return F.embedding(idx, self.embedding)
@@ -85,7 +73,6 @@ class VectorQuantizeEMA(nn.Module):
         rand_centers = self._randomize(x)
         self.cluster_sum.data.copy_(rand_centers)
         self.cluster_size.data.fill_(1)
-        
 
     def _randomize(self, x):
         n = x.size(0)
@@ -94,7 +81,7 @@ class VectorQuantizeEMA(nn.Module):
             std = 0.01 / np.sqrt(self.dim)
             x = x.repeat(r, 1)
             x += std * torch.randn_like(x)
-        return x[torch.randperm(x.size(0))][:self.n_codes]
+        return x[torch.randperm(x.size(0))][: self.n_codes]
 
     def _ema_update(self, x, cluster_assign, dist=None):
         with torch.no_grad():
@@ -113,14 +100,14 @@ class VectorQuantizeEMA(nn.Module):
             # EMA update step
             # self.cluster_size.data.mul_(self.decay).add_(cluster_size, alpha=1-self.decay)
             # self.cluster_sum.data.mul_(self.decay).add_(cluster_sum, alpha=1-self.decay)
-            self.cluster_size.data.copy_(self.decay*self.cluster_size + (1 - self.decay)*cluster_size)
-            self.cluster_sum.data.copy_(self.decay*self.cluster_sum + (1 - self.decay)*cluster_sum)
+            self.cluster_size.data.copy_(self.decay * self.cluster_size + (1 - self.decay) * cluster_size)
+            self.cluster_sum.data.copy_(self.decay * self.cluster_sum + (1 - self.decay) * cluster_sum)
 
             used = (self.cluster_size >= self.threshold).float().unsqueeze(-1)
 
             n = self.cluster_size.sum()
             # Use additive smoothing to mitigate exploding gradients
-            count = (self.cluster_size + self.eps) / (n + self.n_codes*self.eps) * n
+            count = (self.cluster_size + self.eps) / (n + self.n_codes * self.eps) * n
 
             cluster_centers = self.cluster_sum / count.unsqueeze(-1)
             cluster_centers = used * cluster_centers + (1 - used) * rand_centers
@@ -136,31 +123,29 @@ class VectorQuantizeEMA(nn.Module):
             pr = cluster_size / cluster_size.sum()
             entropy = -(pr * (pr + 1e-5).log()).sum()
 
-        return {
-            'avg_usage': avg_usage,
-            'usage': usage,
-            'entropy': entropy
-        }
+        return {"avg_usage": avg_usage, "usage": usage, "entropy": entropy}
 
 
 class VqVaeModule(pl.LightningModule):
-    def __init__(self, 
-                 d_model=512,
-                 context_size=256, 
-                 n_codes=1024, 
-                 n_groups=2,
-                 d_latent=1024,
-                 lr=1e-4, 
-                 lr_schedule='sqrt_decay', 
-                 warmup_steps=1000, 
-                 max_steps=10000,
-                 encoder_layers=6,
-                 decoder_layers=6,
-                 encoder_ffn_dim=2048,
-                 decoder_ffn_dim=2048,
-                 windowed_attention_pr=0.0,
-                 max_lookahead=4,
-                 disable_vq=False):
+    def __init__(
+        self,
+        d_model=512,
+        context_size=256,
+        n_codes=1024,
+        n_groups=2,
+        d_latent=1024,
+        lr=1e-4,
+        lr_schedule="sqrt_decay",
+        warmup_steps=1000,
+        max_steps=10000,
+        encoder_layers=6,
+        decoder_layers=6,
+        encoder_ffn_dim=2048,
+        decoder_ffn_dim=2048,
+        windowed_attention_pr=0.0,
+        max_lookahead=4,
+        disable_vq=False,
+    ):
         super().__init__()
 
         self.d_model = d_model
@@ -181,7 +166,7 @@ class VqVaeModule(pl.LightningModule):
         self.disable_vq = disable_vq
 
         self.vocab = RemiVocab()
-        
+
         self.pad_token = self.vocab.to_i(PAD_TOKEN)
         self.bos_token = self.vocab.to_i(BOS_TOKEN)
         self.eos_token = self.vocab.to_i(EOS_TOKEN)
@@ -195,7 +180,7 @@ class VqVaeModule(pl.LightningModule):
             num_attention_heads=8,
             intermediate_size=encoder_ffn_dim,
             max_position_embeddings=1024,
-            position_embedding_type='relative_key_query'
+            position_embedding_type="relative_key_query",
         )
         decoder_config = BertConfig(
             vocab_size=1,
@@ -205,7 +190,7 @@ class VqVaeModule(pl.LightningModule):
             num_attention_heads=8,
             intermediate_size=decoder_ffn_dim,
             max_position_embeddings=1024,
-            position_embedding_type='relative_key_query'
+            position_embedding_type="relative_key_query",
         )
         config = EncoderDecoderConfig.from_encoder_decoder_configs(encoder_config, decoder_config)
         self.transformer = EncoderDecoderModel(config)
@@ -216,7 +201,7 @@ class VqVaeModule(pl.LightningModule):
 
         self.in_layer = nn.Embedding(len(self.vocab), self.d_model)
         self.out_layer = nn.Linear(self.d_model, len(self.vocab), bias=False)
-        
+
         self.vq_embed = VectorQuantizeEMA(self.d_latent, self.n_codes, self.n_groups)
         self.pooling = nn.Linear(self.d_model, self.d_latent, bias=False)
         self.unpooling = nn.Linear(self.d_latent, self.d_model, bias=False)
@@ -225,14 +210,10 @@ class VqVaeModule(pl.LightningModule):
         self.rec_loss = nn.CrossEntropyLoss(ignore_index=self.pad_token)
 
         self.save_hyperparameters()
-    
+
     def get_datamodule(self, midi_files, **kwargs):
         return MidiDataModule(
-            midi_files, 
-            self.context_size, 
-            max_bars_per_context=1, 
-            bar_token_mask=MASK_TOKEN,
-            **kwargs
+            midi_files, self.context_size, max_bars_per_context=1, bar_token_mask=MASK_TOKEN, **kwargs
         )
 
     def forward(self, x, y=None, latent=None, use_windowed_attention=False, return_latent_logits=False):
@@ -242,14 +223,10 @@ class VqVaeModule(pl.LightningModule):
         # VQ-VAE
         if latent is None:
             encoder_out = self.encode(x)
-            latent = encoder_out['z']
-        
+            latent = encoder_out["z"]
+
         logits = self.decode(x, latent, use_windowed_attention)
-        return {
-            'logits': logits,
-            **encoder_out
-        }
-            
+        return {"logits": logits, **encoder_out}
 
     def embed(self, x):
         return self.in_layer(x)
@@ -265,13 +242,12 @@ class VqVaeModule(pl.LightningModule):
 
         if self.disable_vq:
             # AE baseline
-            return { 'z': z_e }
+            return {"z": z_e}
         else:
             # VQ-VAE
             # Shape of z_q: (batch_size, d_model * n_groups)
             dist = self.trainer.accelerator.training_type_plugin if self.training else None
             return self.vq_embed(z_e, dist=dist)
-
 
     def decode(self, x, latent, use_windowed_attention=False):
         # Shape of latent: (batch_size, n_groups, d_model)
@@ -293,27 +269,26 @@ class VqVaeModule(pl.LightningModule):
         # Relative pos. embeddings need source and target to be of the same length
         # -> prevents einsum shape mismatch error
         padding = torch.zeros_like(x_attention)
-        padding[:, :x_emb.size(1)] = x_emb
+        padding[:, : x_emb.size(1)] = x_emb
         x_emb = padding
-
 
         if self.training or use_windowed_attention:
             attention_mask = self.rand_attention_mask(x)
         else:
             attention_mask = self.get_attention_mask(x)
         padding = torch.zeros((x.size(0), self.context_size, self.context_size), device=self.device, dtype=torch.int)
-        padding[:, :attention_mask.size(1), :attention_mask.size(2)] = attention_mask
+        padding[:, : attention_mask.size(1), : attention_mask.size(2)] = attention_mask
         attention_mask = padding
 
         out = self.decoder(
-            inputs_embeds=x_emb, 
-            encoder_hidden_states=x_attention, 
-            attention_mask=attention_mask, 
-            output_hidden_states=True
+            inputs_embeds=x_emb,
+            encoder_hidden_states=x_attention,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
         )
         hidden = out.hidden_states[-1][:, :seq_len]
         logits = self.out_layer(hidden).contiguous()
-        
+
         return logits
 
     def get_loss(self, batch, windowed_attention_pr=None):
@@ -321,8 +296,8 @@ class VqVaeModule(pl.LightningModule):
             windowed_attention_pr = self.windowed_attention_pr
         use_windowed_attention = True if random.random() < windowed_attention_pr else False
 
-        x = batch['input_ids']
-        labels = batch['labels']
+        x = batch["input_ids"]
+        labels = batch["labels"]
 
         out = self.forward(
             x,
@@ -330,7 +305,7 @@ class VqVaeModule(pl.LightningModule):
             use_windowed_attention=use_windowed_attention,
         )
 
-        logits = out['logits']
+        logits = out["logits"]
         # Reshape logits to: (batch_size * seq_len, vocab_size)
         logits = logits.view(-1, logits.size(-1))
         # Reshape labels to: (batch_size * seq_len)
@@ -341,44 +316,50 @@ class VqVaeModule(pl.LightningModule):
         if self.disable_vq:
             loss = rec_loss
         else:
-            diff = out['diff']
-            loss = rec_loss + self.beta*diff
-        
-        return {
-            'loss': loss,
-            'rec_loss': rec_loss,
-            **out
-        }
-    
+            diff = out["diff"]
+            loss = rec_loss + self.beta * diff
+
+        return {"loss": loss, "rec_loss": rec_loss, **out}
+
     def training_step(self, batch, batch_idx, optimizer_idx=0):
         metrics = self.get_loss(batch)
-        log_metrics = { key: metrics[key].detach() for key in ['loss', 'rec_loss', 'diff', 'avg_usage', 'usage', 'entropy'] if key in metrics }
-        self.log('train', log_metrics, on_step=True, on_epoch=True, prog_bar=False, logger=True, sync_dist=True)
-        return metrics['loss']
-    
+        log_metrics = {
+            key: metrics[key].detach()
+            for key in ["loss", "rec_loss", "diff", "avg_usage", "usage", "entropy"]
+            if key in metrics
+        }
+        self.log("train", log_metrics, on_step=True, on_epoch=True, prog_bar=False, logger=True, sync_dist=True)
+        return metrics["loss"]
+
     def validation_step(self, batch, batch_idx):
         metrics = self.get_loss(batch)
-        log_metrics = { key: metrics[key].detach() for key in ['rec_loss', 'diff', 'avg_usage', 'usage', 'entropy'] if key in metrics }
+        log_metrics = {
+            key: metrics[key].detach()
+            for key in ["rec_loss", "diff", "avg_usage", "usage", "entropy"]
+            if key in metrics
+        }
 
         # Compute perplexity
-        x, y = batch['input_ids'], batch['labels']
+        x, y = batch["input_ids"], batch["labels"]
         pad_token_id = self.vocab.to_i(PAD_TOKEN)
-        logits = metrics['logits']
+        logits = metrics["logits"]
         log_pr = logits.log_softmax(dim=-1)
-        log_pr[y == pad_token_id] = 0 # log(pr) = log(1) for padding
+        log_pr[y == pad_token_id] = 0  # log(pr) = log(1) for padding
         log_pr = torch.gather(log_pr, -1, y.unsqueeze(-1)).squeeze(-1)
         t = (y != pad_token_id).sum(dim=-1)
         ppl = (-log_pr.sum(dim=1) / t).exp().mean()
-        log_metrics['ppl'] = ppl.detach()
+        log_metrics["ppl"] = ppl.detach()
 
-        self.log('valid', log_metrics, on_step=True, on_epoch=True, prog_bar=False, logger=True, sync_dist=True)
+        self.log("valid", log_metrics, on_step=True, on_epoch=True, prog_bar=False, logger=True, sync_dist=True)
         # Log loss separately for model checkpoint monitor
-        self.log('valid_loss', metrics['loss'], on_step=True, on_epoch=True, prog_bar=False, logger=True, sync_dist=True)
-        return metrics['loss']
-    
+        self.log(
+            "valid_loss", metrics["loss"], on_step=True, on_epoch=True, prog_bar=False, logger=True, sync_dist=True
+        )
+        return metrics["loss"]
+
     def test_step(self, batch, batch_idx):
         metrics = self.get_loss(batch)
-        return metrics['loss']
+        return metrics["loss"]
 
     def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx):
         step = self.trainer.global_step
@@ -397,24 +378,35 @@ class VqVaeModule(pl.LightningModule):
         # set LR to 1, scale with LambdaLR scheduler
         optimizer = torch.optim.AdamW(self.parameters(), lr=1, weight_decay=0.01)
 
-        if self.lr_schedule == 'sqrt_decay':
+        if self.lr_schedule == "sqrt_decay":
             # constant warmup, then 1/sqrt(n) decay starting from the initial LR
-            lr_func = lambda step: min(self.lr, self.lr / math.sqrt(max(step, 1)/self.warmup_steps))
-        elif self.lr_schedule == 'linear':
+            lr_func = lambda step: min(self.lr, self.lr / math.sqrt(max(step, 1) / self.warmup_steps))
+        elif self.lr_schedule == "linear":
             # linear warmup, linear decay
-            lr_func = lambda step: min(self.lr, self.lr*step/self.warmup_steps, self.lr*(1 - (step - self.warmup_steps)/self.max_steps))
-        elif self.lr_schedule == 'cosine':
+            lr_func = lambda step: min(
+                self.lr, self.lr * step / self.warmup_steps, self.lr * (1 - (step - self.warmup_steps) / self.max_steps)
+            )
+        elif self.lr_schedule == "cosine":
             # linear warmup, cosine decay to 10% of initial LR
-            lr_func = lambda step: self.lr * min(step/self.warmup_steps, 0.55 + 0.45*math.cos(math.pi*(min(step, self.max_steps) - self.warmup_steps)/(self.max_steps - self.warmup_steps)))
+            lr_func = lambda step: self.lr * min(
+                step / self.warmup_steps,
+                0.55
+                + 0.45
+                * math.cos(
+                    math.pi * (min(step, self.max_steps) - self.warmup_steps) / (self.max_steps - self.warmup_steps)
+                ),
+            )
         else:
             # Use no lr scheduling
             lr_func = lambda step: self.lr
-        
+
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_func)
-        return [optimizer], [{
-            'scheduler': scheduler,
-            'interval': 'step',
-        }]
+        return [optimizer], [
+            {
+                "scheduler": scheduler,
+                "interval": "step",
+            }
+        ]
 
     def rand_attention_mask(self, x, pr=0.2, max_size=None):
         if max_size == None:
@@ -424,20 +416,19 @@ class VqVaeModule(pl.LightningModule):
         else:
             mask_size, k = 1, 1
         return self.get_attention_mask(x, mask_size=mask_size, k=k)
-    
+
     def get_attention_mask(self, x, mask_size=1, k=1):
         batch_size, seq_len = x.shape[:2]
 
         # Standard self-attention mask for auto-regressive modelling
-        tri_mask = torch.ones((seq_len//mask_size+1, seq_len//mask_size+1), device=self.device, dtype=torch.int)
+        tri_mask = torch.ones((seq_len // mask_size + 1, seq_len // mask_size + 1), device=self.device, dtype=torch.int)
         tri_mask = torch.triu(tri_mask, diagonal=k)
         tri_mask = (~tri_mask.bool()).int()
         # Create windowed self-attention mask, forcing the model to prefict farther into the future
-        window_mask = tri_mask.repeat_interleave(mask_size, dim=0).repeat_interleave(mask_size, dim=1)[:seq_len, :seq_len]
+        window_mask = tri_mask.repeat_interleave(mask_size, dim=0).repeat_interleave(mask_size, dim=1)[
+            :seq_len, :seq_len
+        ]
         # First token needs to be always visible
         window_mask[:, 0] = 1
 
         return window_mask.unsqueeze(0).repeat(batch_size, 1, 1)
-
-
-

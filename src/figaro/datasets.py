@@ -7,9 +7,9 @@ import math
 import os
 import pickle
 
-from input_representation import InputRepresentation
-from vocab import RemiVocab, DescriptionVocab
-from constants import (
+from figaro.input_representation import InputRepresentation
+from figaro.vocab import RemiVocab, DescriptionVocab
+from figaro.constants import (
     PAD_TOKEN,
     BOS_TOKEN,
     EOS_TOKEN,
