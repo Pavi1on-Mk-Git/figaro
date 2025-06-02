@@ -227,6 +227,7 @@ class MidiDataset(IterableDataset):
         bar_token_idx=2,
         use_cache=True,
         print_errors=False,
+        device=None,
     ):
         self.files = midi_files
         self.group_bars = group_bars
@@ -237,15 +238,16 @@ class MidiDataset(IterableDataset):
         self.max_contexts_per_file = max_contexts_per_file
         self.use_cache = use_cache
         self.print_errors = print_errors
+        self.device = device
 
         self.vocab = RemiVocab()
 
         self.description_flavor = description_flavor
         if self.description_flavor in ["latent", "both"]:
             assert vae_module is not None
-            self.vae_module = vae_module.cpu()
-            self.vae_module.eval()
-            self.vae_module.freeze()
+            vae_module.eval()
+            vae_module.freeze()
+            self.vae_module = vae_module
         self.description_options = description_options
 
         self.desc_vocab = DescriptionVocab()
@@ -504,13 +506,10 @@ class MidiDataset(IterableDataset):
 
             bos, eos = self.get_bos_eos_events()
 
-            self.vae_module.eval()
-            self.vae_module.freeze()
-
             latents = []
             codes = []
             for bar in groups:
-                x = torch.cat([bos, bar, eos])[: self.vae_module.context_size].unsqueeze(0)
+                x = torch.cat([bos, bar, eos])[: self.vae_module.context_size].unsqueeze(0).to(self.device)
                 out = self.vae_module.encode(x)
                 z, code = out["z"], out["codes"]
                 latents.append(z)
