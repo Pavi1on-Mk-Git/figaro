@@ -407,17 +407,22 @@ class Seq2SeqModule(pl.LightningModule):
             )
 
             idx = min(self.context_size - 1, i)
-            logits = logits[:, idx] / temp
 
-            pr = F.softmax(logits, dim=-1)
-            pr = pr.view(-1, pr.size(-1))
+            if temp > 0:
+                logits = logits[:, idx] / temp
+                pr = F.softmax(logits, dim=-1)
+                pr = pr.view(-1, pr.size(-1))
+                next_token_ids = torch.multinomial(pr, 1).view(-1).cpu()
+            else:
+                next_token_ids = torch.argmax(logits[:, idx]).view(-1).cpu()
 
-            next_token_ids = torch.multinomial(pr, 1).view(-1).to(x.device)
             next_tokens = self.vocab.decode(next_token_ids)
             if verbose:
                 print(f"{i+1}/{max_length}", next_tokens)
 
-            next_bars = torch.tensor([1 if f"{BAR_KEY}_" in token else 0 for token in next_tokens], dtype=torch.int)
+            next_bars = torch.tensor([1 if f"{BAR_KEY}_" in token else 0 for token in next_tokens], dtype=torch.int).to(
+                bar_ids.device
+            )
             next_bar_ids = bar_ids[:, i].clone() + next_bars
 
             next_positions = [f"{POSITION_KEY}_0" if f"{BAR_KEY}_" in token else token for token in next_tokens]
@@ -427,14 +432,14 @@ class Seq2SeqModule(pl.LightningModule):
             next_positions = [
                 pos if next_pos is None else next_pos for pos, next_pos in zip(position_ids[:, i], next_positions)
             ]
-            next_position_ids = torch.tensor(next_positions, dtype=torch.int)
+            next_position_ids = torch.tensor(next_positions, dtype=torch.int).to(position_ids.device)
 
             is_done.masked_fill_((next_token_ids == eos_token_id).all(dim=-1), True)
             next_token_ids[is_done] = pad_token_id
             if max_bars > 0:
                 is_done.masked_fill_(next_bar_ids >= max_bars + 1, True)
 
-            x = torch.cat([x, next_token_ids.clone().unsqueeze(1)], dim=1)
+            x = torch.cat([x, next_token_ids.clone().unsqueeze(1).to(x.device)], dim=1)
             bar_ids = torch.cat([bar_ids, next_bar_ids.unsqueeze(1)], dim=1)
             position_ids = torch.cat([position_ids, next_position_ids.unsqueeze(1)], dim=1)
 
